@@ -397,6 +397,26 @@ glib_schannel_deps = \
 glib_schannel_deps_for_build = \
 	$(NULL)
 
+libnice_version = 36aa468c4916cfccd4363f0e27af19f2aeae8604
+libnice_url = https://gitlab.freedesktop.org/libnice/libnice.git
+libnice_hash = $(NULL)
+libnice_recipe = meson
+libnice_patches = \
+	$(NULL)
+libnice_options = \
+	-Dgupnp=disabled \
+	-Dgstreamer=disabled \
+	-Dexamples=disabled \
+	-Dtests=disabled \
+	-Dintrospection=disabled \
+	$(NULL)
+libnice_deps = \
+	glib \
+	openssl \
+	$(NULL)
+libnice_deps_for_build = \
+	$(NULL)
+
 libgee_version = c7e96ac037610cc3d0e11dc964b7b1fca479fc2a
 libgee_url = $(frida_base_url)/libgee.git
 libgee_hash = $(NULL)
