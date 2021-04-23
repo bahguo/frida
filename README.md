@@ -65,6 +65,7 @@ for details.
 Have a look at our [documentation](https://frida.re/docs/home/).
 
 ## 3. Scripts Sample
-By [apkunpacker](https://github.com/apkunpacker/FridaScripts)
 
-By [KingMahmud](https://github.com/KingMahmud/Frida-examples)
+By [apkunpacker](https://github.com/apkunpacker/FridaScripts), 
+[enovella](https://github.com/enovella/fridroid-unpacker), 
+[KingMahmud](https://github.com/KingMahmud/Frida-examples)
