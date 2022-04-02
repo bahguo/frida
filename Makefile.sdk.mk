@@ -3,7 +3,7 @@ include releng/deps.mk
 
 
 MAKE_J ?= -j 8
-SHELL = /bin/bash
+SHELL := $(shell which bash)
 
 
 packages = \
@@ -14,6 +14,9 @@ packages = \
 	sqlite \
 	libffi \
 	glib \
+	glib-networking \
+	libnice \
+	usrsctp \
 	libgee \
 	json-glib \
 	libsoup \
@@ -31,12 +34,12 @@ ifeq ($(host_os), $(filter $(host_os), linux android qnx))
 packages += elfutils libdwarf libunwind
 endif
 
-ifeq ($(host_os), android)
-packages += selinux
+ifeq ($(host_os), freebsd)
+packages += libdwarf libunwind
 endif
 
-ifeq ($(host_os), $(filter $(host_os), macos ios linux android))
-packages += glib-networking libnice
+ifeq ($(host_os), android)
+packages += selinux
 endif
 
 ifneq ($(FRIDA_V8), disabled)
@@ -93,7 +96,7 @@ build/sdk-$(host_os)-$(host_arch).tar.bz2: build/fs-tmp-$(host_os_arch)/.package
 	@$(call print-status,📦,Compressing)
 	@tar \
 		-C build/fs-tmp-$(host_os_arch)/package \
-		-cjf $(abspath $@.tmp) \
+		-cjf $(shell pwd)/$@.tmp \
 		.
 	@mv $@.tmp $@
 
@@ -108,268 +111,28 @@ build/fs-tmp-%/.package-stamp: $(foreach pkg, $(packages), build/fs-%/manifest/$
 		&& [ -d lib/gio/modules ] && gio_modules=lib/gio/modules/*.a || gio_modules= \
 		&& [ -d lib32 ] && lib32=lib32 || lib32= \
 		&& [ -d lib64 ] && lib64=lib64 || lib64= \
-		&& tar -c \
+		&& [ -d libdata ] && libdatadir=libdata || libdatadir=lib \
+		&& tar -cf - \
 			include \
 			lib/*.a \
-			lib/*.la \
 			lib/glib-2.0 \
 			lib/libffi* \
-			lib/pkgconfig \
+			$$libdatadir/pkgconfig \
 			$$tcc \
 			$$libcpp \
 			$$gio_modules \
 			$$lib32 \
 			$$lib64 \
 			manifest \
-			share/aclocal \
 			share/glib-2.0/schemas \
 			share/vala \
-			| tar -C $(abspath $(@D)/package) -xf -
-	@releng/pkgify.sh $(@D)/package $(abspath build/fs-$*) $(abspath releng)
-ifeq ($(host_os), ios)
-	@cp $(shell $(xcode_env_setup); $(xcode_run) --sdk macosx --show-sdk-path)/usr/include/mach/mach_vm.h \
-		$(@D)/package/include/frida_mach_vm.h
-endif
+			| tar -C $(shell pwd)/$(@D)/package -xf -
+	@releng/pkgify.sh "$(@D)/package" "$(shell pwd)/build/fs-$*" "$(shell pwd)/releng"
 	@echo "$(frida_deps_version)" > $(@D)/package/VERSION.txt
 	@touch $@
 
 
 $(eval $(call make-package-rules,$(packages),fs))
-
-
-libelf_headers = \
-	libelf.h \
-	elf.h \
-	gelf.h \
-	nlist.h \
-	$(NULL)
-
-$(eval $(call make-autotools-package-rules-without-build-rule,elfutils,fs))
-
-build/fs-%/manifest/elfutils.pkg: build/fs-env-%.rc build/fs-tmp-%/elfutils/Makefile
-	@$(call print-status,elfutils,Building)
-	@prefix=build/fs-$*; \
-	builddir=build/fs-tmp-$*/elfutils; \
-	(set -x \
-		&& . $< \
-		&& $(MAKE) $(MAKE_J) -C $$builddir/libelf libelf.a \
-			elf_begin_no_Werror=1 \
-			elf_cntl_no_Werror=1 \
-			elf32_updatenull_no_Werror=1 \
-			elf64_updatenull_no_Werror=1 \
-		&& install -d $$prefix/include \
-		&& for header in $(libelf_headers); do \
-			install -m 644 deps/elfutils/libelf/$$header $$prefix/include; \
-		done \
-		&& install -d $$prefix/lib \
-		&& install -m 644 $$builddir/libelf/libelf.a $$prefix/lib \
-		&& install -d $$prefix/lib/pkgconfig \
-		&& install -m 644 $$builddir/config/libelf.pc $$prefix/lib/pkgconfig \
-	) >>$$builddir/build.log 2>&1
-	@$(call print-status,elfutils,Generating manifest)
-	@( \
-		for header in $(libelf_headers); do \
-			echo "include/$$header"; \
-		done; \
-		echo "lib/libelf.a" \
-	) | sort > $@
-
-
-libdwarf_headers = \
-	dwarf.h \
-	libdwarf.h \
-	$(NULL)
-
-$(eval $(call make-autotools-package-rules-without-build-rule,libdwarf,fs))
-
-build/fs-%/manifest/libdwarf.pkg: build/fs-env-%.rc build/fs-tmp-%/libdwarf/Makefile
-	@$(call print-status,libdwarf,Building)
-	@prefix=build/fs-$*; \
-	builddir=build/fs-tmp-$*/libdwarf; \
-	(set -x \
-		&& . $< \
-		&& $(MAKE) $(MAKE_J) -C $$builddir/libdwarf libdwarf.la \
-		&& install -d $$prefix/include \
-		&& for header in $(libdwarf_headers); do \
-			install -m 644 deps/libdwarf/libdwarf/$$header $$prefix/include; \
-		done \
-		&& install -d $$prefix/lib \
-		&& install -m 644 $$builddir/libdwarf/.libs/libdwarf.a $$prefix/lib \
-	) >>$$builddir/build.log 2>&1
-	@$(call print-status,libdwarf,Generating manifest)
-	@( \
-		for header in $(libdwarf_headers); do \
-			echo "include/$$header"; \
-		done; \
-		echo "lib/libdwarf.a" \
-	) | sort > $@
-
-
-ifeq ($(FRIDA_ASAN), yes)
-openssl_buildtype_args := \
-	enable-asan \
-	$(NULL)
-else
-openssl_buildtype_args := \
-	$(NULL)
-endif
-
-ifeq ($(host_os), $(filter $(host_os), macos ios))
-
-ifeq ($(host_os_arch), macos-x86)
-openssl_arch_args := macos-i386
-endif
-ifeq ($(host_os_arch), macos-x86_64)
-openssl_arch_args := macos64-x86_64 enable-ec_nistp_64_gcc_128
-endif
-ifeq ($(host_os_arch), macos-arm64)
-openssl_arch_args := macos64-cross-arm64 enable-ec_nistp_64_gcc_128
-endif
-ifeq ($(host_os_arch), macos-arm64e)
-openssl_arch_args := macos64-cross-arm64e enable-ec_nistp_64_gcc_128
-endif
-
-ifeq ($(host_os_arch), ios-x86)
-openssl_arch_args := ios-sim-cross-i386
-endif
-ifeq ($(host_os_arch), ios-x86_64)
-openssl_arch_args := ios-sim-cross-x86_64 enable-ec_nistp_64_gcc_128
-endif
-ifeq ($(host_os_arch), ios-arm)
-openssl_arch_args := ios-cross-armv7 -D__ARM_MAX_ARCH__=7
-endif
-ifeq ($(host_os_arch), ios-arm64)
-openssl_arch_args := ios64-cross-arm64 enable-ec_nistp_64_gcc_128
-endif
-ifeq ($(host_os_arch), $(filter $(host_os_arch), ios-arm64e ios-arm64eoabi))
-openssl_arch_args := ios64-cross-arm64e enable-ec_nistp_64_gcc_128
-endif
-
-openssl_host_env := \
-	CPP=clang CC=clang CXX=clang++ LD= LDFLAGS= AR= RANLIB= \
-	CROSS_COMPILE="$(xcode_developer_dir)/Toolchains/XcodeDefault.xctoolchain/usr/bin/" \
-	CROSS_TOP="${xcode_developer_dir}/Platforms/$(xcode_platform).platform/Developer" \
-	CROSS_SDK=$(xcode_platform)$(xcode_sdk_version).sdk \
-	IOS_MIN_SDK_VERSION=8.0 \
-	CONFIG_DISABLE_BITCODE=true \
-	$(NULL)
-
-ifeq ($(host_os_arch), macos-x86)
-ifneq ($(MACOS_X86_SDK_ROOT),)
-openssl_host_env += MACOS_SDK_ROOT="$(MACOS_X86_SDK_ROOT)"
-endif
-endif
-
-ifeq ($(host_os_arch), $(filter $(host_os_arch), macos-arm64 macos-arm64e))
-openssl_host_env += MACOS_MIN_SDK_VERSION=11.0
-else
-openssl_host_env += MACOS_MIN_SDK_VERSION=10.9
-endif
-
-endif
-
-ifeq ($(host_os), linux)
-
-ifeq ($(host_arch), x86)
-openssl_arch_args := linux-x86
-endif
-ifeq ($(host_arch), x86_64)
-openssl_arch_args := linux-x86_64 enable-ec_nistp_64_gcc_128
-endif
-ifeq ($(host_arch), $(filter $(host_arch), arm armbe8 armeabi armhf))
-openssl_arch_args := linux-armv4
-endif
-ifeq ($(host_arch), arm64)
-openssl_arch_args := linux-aarch64
-endif
-ifeq ($(host_arch), $(filter $(host_arch), mips mipsel))
-openssl_arch_args := linux-mips32 no-asm
-endif
-ifeq ($(host_arch), $(filter $(host_arch), mips64 mips64el))
-openssl_arch_args := linux-mips64
-endif
-ifeq ($(host_arch), s390x)
-openssl_arch_args := linux64-s390x
-endif
-
-openssl_host_env := \
-	$(NULL)
-
-endif
-
-ifeq ($(host_os), android)
-
-ifeq ($(host_arch), x86)
-openssl_arch_args := android-x86 -D__ANDROID_API__=18
-endif
-ifeq ($(host_arch), x86_64)
-openssl_arch_args := android-x86_64 -D__ANDROID_API__=21
-endif
-ifeq ($(host_arch), arm)
-openssl_arch_args := android-arm -D__ANDROID_API__=18 -D__ARM_MAX_ARCH__=7
-endif
-ifeq ($(host_arch), arm64)
-openssl_arch_args := android-arm64 -D__ANDROID_API__=21
-endif
-
-ndk_build_os_arch := $(shell uname -s | tr '[A-Z]' '[a-z]')-$(build_arch)
-ndk_llvm_prefix := $(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(ndk_build_os_arch)
-openssl_host_env := \
-	PATH=$(ndk_llvm_prefix)/bin:$$PATH \
-	$(NULL)
-
-endif
-
-.PHONY: openssl
-
-openssl: build/fs-$(host_os_arch)/manifest/openssl.pkg
-	. build/fs-env-$(host_os_arch).rc \
-		&& . $$CONFIG_SITE \
-		&& export CC CFLAGS \
-		&& export $(openssl_host_env) OPENSSL_LOCAL_CONFIG_DIR="$(abspath releng/openssl-config)" \
-		&& cd build/fs-tmp-$(host_os_arch)/openssl \
-		&& $(MAKE) build_libs \
-		&& $(MAKE) install_dev
-
-$(eval $(call make-clean-package-rules,openssl,fs,$(host_os_arch)))
-
-$(eval $(call make-symlinks-package-rule,openssl,fs,$(host_os_arch)))
-
-deps/.openssl-stamp:
-	$(call grab-and-prepare,openssl)
-	@touch $@
-
-build/fs-tmp-%/openssl/Configure: deps/.openssl-stamp
-	@$(call print-status,openssl,Setting up build directory)
-	@$(RM) -r $(@D)
-	@mkdir -p build/fs-tmp-$*
-	@cp -a deps/openssl $(@D)
-	@touch $@
-
-build/fs-%/manifest/openssl.pkg: build/fs-env-%.rc build/fs-tmp-%/openssl/Configure \
-		$(foreach dep, $(openssl_deps), build/fs-%/manifest/$(dep).pkg) \
-		$(foreach dep, $(openssl_deps_for_build), build/fs-$(build_os_arch)/manifest/$(dep).pkg)
-	@$(call print-status,openssl,Building)
-	@builddir=build/fs-tmp-$*/openssl; \
-	(set -x \
-		&& . $< \
-		&& . $$CONFIG_SITE \
-		&& export CC CFLAGS \
-		&& export $(openssl_host_env) OPENSSL_LOCAL_CONFIG_DIR="$(abspath releng/openssl-config)" \
-		&& cd $$builddir \
-		&& perl Configure \
-			--prefix=$$frida_prefix \
-			$(openssl_options) \
-			$(openssl_buildtype_args) \
-			$(openssl_arch_args) \
-		&& $(MAKE) depend \
-		&& $(MAKE) build_libs \
-		&& $(MAKE) install_dev \
-	) >$$builddir/build.log 2>&1 \
-	&& $(call print-status,openssl,Generating manifest) \
-	&& (set -x; \
-		$(call make-autotools-manifest-commands,openssl,fs,$*,install_dev) \
-	) >>$$builddir/build.log 2>&1
 
 
 ifeq ($(FRIDA_ASAN), yes)
@@ -458,6 +221,12 @@ v8_platform_args := \
 	use_gold=false
 endif
 ifeq ($(host_os), android)
+ifeq ($(build_os_arch), macos-arm64)
+# NDK does not yet support Apple Silicon.
+ndk_build_os_arch := darwin-x86_64
+else
+ndk_build_os_arch := $(shell uname -s | tr '[A-Z]' '[a-z]')-$(build_arch)
+endif
 v8_os := android
 v8_platform_args := \
 	use_xcode_clang=true \
@@ -465,7 +234,7 @@ v8_platform_args := \
 	android_ndk_root="$(ANDROID_NDK_ROOT)" \
 	android_ndk_version="r21" \
 	android_ndk_major_version=21 \
-	android32_ndk_api_level=18 \
+	android32_ndk_api_level=19 \
 	android64_ndk_api_level=21 \
 	clang_base_path="$(abspath $(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(ndk_build_os_arch))"
 endif
@@ -486,6 +255,14 @@ ifeq ($(host_os), ios)
 v8_platform_args += ios_sdk_path="$(IOS_SDK_ROOT)"
 endif
 endif
+ifeq ($(host_os), freebsd)
+v8_os := freebsd
+endif
+
+depot_tools_config := \
+	DEPOT_TOOLS_UPDATE=0 \
+	VPYTHON_BYPASS="manually managed python not supported by chrome operations" \
+	$(NULL)
 
 # Google's prebuilt GN requires a newer glibc than our Debian Squeeze buildroot has.
 
@@ -504,7 +281,7 @@ build/fs-tmp-%/gn/build.ninja: build/fs-env-%.rc deps/.gn-stamp \
 	@(set -x \
 		&& . $< \
 		&& CC="$$CC" CXX="$$CXX" python deps/gn/build/gen.py \
-			--out-path $(abspath $(@D)) \
+			--out-path $(shell pwd)/$(@D) \
 			$(gn_options) \
 	) >$(@D)/build.log 2>&1
 
@@ -513,7 +290,8 @@ build/fs-%/manifest/gn.pkg: build/fs-tmp-%/gn/build.ninja
 	@prefix=build/fs-$*; \
 	builddir=build/fs-tmp-$*/gn; \
 	(set -x \
-		&& $(NINJA) -C $$builddir \
+		&& . build/fs-env-$*.rc \
+		&& ninja -C $$builddir \
 		&& install -d $$prefix/bin \
 		&& install -m 755 $$builddir/gn $$prefix/bin \
 	) >>$$builddir/build.log 2>&1
@@ -544,8 +322,8 @@ deps/v8-checkout/.gclient: deps/.depot_tools-stamp
 	@$(call print-repo-banner,v8,$(v8_version),$(v8_url))
 	@mkdir -p $(@D)
 	@cd deps/v8-checkout \
-		&& PATH="$(abspath deps/depot_tools):$$PATH" \
-			gclient config --spec 'solutions = [ \
+		&& export PATH="$(shell pwd)/deps/depot_tools:$$PATH" $(depot_tools_config) \
+		&& gclient config --spec 'solutions = [ \
   { \
     "url": "$(v8_url)@$(v8_version)", \
     "managed": False, \
@@ -558,8 +336,8 @@ deps/v8-checkout/.gclient: deps/.depot_tools-stamp
 deps/v8-checkout/v8: deps/v8-checkout/.gclient
 	@$(call print-status,v8,Cloning into deps/v8-checkout)
 	@cd deps/v8-checkout \
-		&& PATH="$(abspath deps/depot_tools):$$PATH" \
-			gclient sync
+		&& export PATH="$(shell pwd)/deps/depot_tools:$$PATH" $(depot_tools_config) \
+		&& gclient sync
 	@touch $@
 
 build/fs-tmp-%/v8/build.ninja: deps/v8-checkout/v8 build/fs-$(build_os_arch)/manifest/gn.pkg \
@@ -572,7 +350,7 @@ build/fs-tmp-%/v8/build.ninja: deps/v8-checkout/v8 build/fs-$(build_os_arch)/man
 		&& cd deps/v8-checkout/v8 \
 		&& $(xcode_env_setup) \
 		&& ../../../build/fs-$(build_os_arch)/bin/gn \
-			gen $(abspath $(@D)) \
+			gen $(shell pwd)/$(@D) \
 			--args='$(strip \
 				target_os="$(v8_os)" \
 				target_cpu="$(v8_cpu)" \
@@ -580,6 +358,7 @@ build/fs-tmp-%/v8/build.ninja: deps/v8-checkout/v8 build/fs-$(build_os_arch)/man
 				$(v8_buildtype_args) \
 				$(v8_platform_args) \
 				$(v8_options) \
+				$(FRIDA_V8_EXTRA_ARGS) \
 			)' \
 	) >$(@D)/build.log 2>&1
 
@@ -589,8 +368,9 @@ build/fs-%/manifest/v8.pkg: build/fs-tmp-%/v8/build.ninja
 	srcdir=deps/v8-checkout/v8; \
 	builddir=build/fs-tmp-$*/v8; \
 	(set -x \
+		&& . build/fs-env-$*.rc \
 		&& $(xcode_env_setup) \
-		&& $(NINJA) -C $$builddir v8_monolith \
+		&& ninja -C $$builddir v8_monolith \
 		&& install -d $$prefix/include/v8-$(v8_api_version)/v8 \
 		&& install -m 644 $$srcdir/include/*.h $$prefix/include/v8-$(v8_api_version)/v8/ \
 		&& install -d $$prefix/include/v8-$(v8_api_version)/v8/inspector \
@@ -608,7 +388,15 @@ build/fs-%/manifest/v8.pkg: build/fs-tmp-%/v8/build.ninja
 			-b $$builddir \
 			-g build/fs-$(build_os_arch)/bin/gn \
 			patch $$prefix/include/v8-$(v8_api_version)/v8/v8config.h \
-		&& install -d $$prefix/lib/pkgconfig \
+		&& case $* in \
+			freebsd-*) \
+				libdatadir=libdata; \
+				;; \
+			*) \
+				libdatadir=lib; \
+				;; \
+		esac \
+		&& install -d $$prefix/$$libdatadir/pkgconfig \
 		&& ( \
 			echo "prefix=\$${frida_sdk_prefix}"; \
 			echo "libdir=\$${prefix}/lib"; \
@@ -625,7 +413,7 @@ build/fs-%/manifest/v8.pkg: build/fs-tmp-%/v8/build.ninja
 				get libs); \
 			[ -n "$$libs" ] && echo "Libs.private: $$libs"; \
 			echo "Cflags: -I\$${includedir} -I\$${includedir}/v8" \
-		) > $$prefix/lib/pkgconfig/v8-$(v8_api_version).pc \
+		) > $$prefix/$$libdatadir/pkgconfig/v8-$(v8_api_version).pc \
 	) >>$$builddir/build.log 2>&1 \
 	&& $(call print-status,v8,Generating manifest) \
 	&& ( \
@@ -644,8 +432,9 @@ build/fs-%/manifest/libcxx.pkg: build/fs-%/manifest/v8.pkg
 	srcdir=deps/v8-checkout/v8; \
 	builddir=build/fs-tmp-$*/v8; \
 	(set -x \
+		&& . build/fs-env-$*.rc \
 		&& $(xcode_env_setup) \
-		&& $(NINJA) -C $$builddir libc++ \
+		&& ninja -C $$builddir libc++ \
 		&& install -d $$prefix/include/c++/ \
 		&& cp -a $$srcdir/buildtools/third_party/libc++/trunk/include/* $$prefix/include/c++/ \
 		&& rm $$prefix/include/c++/CMakeLists.txt $$prefix/include/c++/__config_site.in \
@@ -683,8 +472,6 @@ build/fs-env-%.rc:
 	@for os_arch in $(build_os_arch) $*; do \
 		if [ ! -f build/fs-env-$$os_arch.rc ]; then \
 			FRIDA_HOST=$$os_arch \
-			FRIDA_ACOPTFLAGS="$(FRIDA_ACOPTFLAGS_BOTTLE)" \
-			FRIDA_ACDBGFLAGS="$(FRIDA_ACDBGFLAGS_BOTTLE)" \
 			FRIDA_ASAN=$(FRIDA_ASAN) \
 			FRIDA_ENV_NAME=fs \
 			FRIDA_ENV_SDK=none \

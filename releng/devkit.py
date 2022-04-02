@@ -93,7 +93,7 @@ def generate_header(package, frida_root, host, kit, flavor, umbrella_header_path
     else:
         rc = env_rc(frida_root, host, flavor)
         header_dependencies = subprocess.check_output(
-            ["(. \"{rc}\" && $CPP $CFLAGS -M $($PKG_CONFIG --cflags {package}) \"{header}\")".format(rc=rc, package=package, header=umbrella_header_path)],
+            ["(. \"{rc}\" && $CC $CFLAGS -E -M $($PKG_CONFIG --cflags {package}) \"{header}\")".format(rc=rc, package=package, header=umbrella_header_path)],
             shell=True).decode('utf-8')
         header_lines = header_dependencies.strip().split("\n")[1:]
         header_files = [line.rstrip("\\").strip() for line in header_lines]
@@ -201,8 +201,21 @@ def generate_library_windows(package, frida_root, host, flavor, output_dir, libr
         sdk_lib_path("libgio-2.0.a", frida_root, host),
     ]
 
-    tls_provider = [
-        sdk_lib_path(os.path.join("gio", "modules", "libgioschannel.a"), frida_root, host),
+    openssl = [
+        sdk_lib_path("libssl.a", frida_root, host),
+        sdk_lib_path("libcrypto.a", frida_root, host),
+    ]
+
+    tls_provider = openssl + [
+        sdk_lib_path(os.path.join("gio", "modules", "libgioopenssl.a"), frida_root, host),
+    ]
+
+    nice = [
+        sdk_lib_path("libnice.a", frida_root, host),
+    ]
+
+    usrsctp = [
+        sdk_lib_path("libusrsctp.a", frida_root, host),
     ]
 
     json_glib = glib + gobject + [
@@ -251,7 +264,7 @@ def generate_library_windows(package, frida_root, host, flavor, output_dir, libr
     gum_lib = internal_arch_lib_path("gum", frida_root, host)
     gum_deps = deduplicate(glib + gobject + gio + capstone)
     gumjs_deps = deduplicate([gum_lib] + gum_deps + quickjs + v8 + tls_provider + json_glib + tinycc + sqlite + libsoup)
-    frida_core_deps = deduplicate(glib + gobject + gio + tls_provider + json_glib + gmodule + gee + libsoup + capstone)
+    frida_core_deps = deduplicate(glib + gobject + gio + tls_provider + nice + openssl + usrsctp + json_glib + gmodule + gee + libsoup + capstone)
 
     if package == "frida-gum-1.0":
         package_lib_path = gum_lib
@@ -302,8 +315,8 @@ def generate_library_unix(package, frida_root, host, flavor, output_dir, library
         libcxx_libs = glob(os.path.join(v8_libdir, "c++", "*.a"))
         library_paths.extend(libcxx_libs)
 
-    ar_version = subprocess.Popen([ar, "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).communicate()[0].decode('utf-8')
-    mri_supported = ar_version.startswith("GNU ar ")
+    ar_help = subprocess.Popen([ar, "--help"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).communicate()[0].decode('utf-8')
+    mri_supported = "-M [<mri-script]" in ar_help
 
     if mri_supported:
         mri = ["create " + output_path]
@@ -324,8 +337,8 @@ def generate_library_unix(package, frida_root, host, flavor, output_dir, library
             scratch_dir = tempfile.mkdtemp(prefix="devkit")
 
             subprocess.check_output([ar, "x", library_path], cwd=scratch_dir)
-            for object_path in glob(os.path.join(scratch_dir, "*.o")):
-                object_name = os.path.basename(object_path)
+            for object_name in [name for name in os.listdir(scratch_dir) if name.endswith(".o")]:
+                object_path = os.path.join(scratch_dir, object_name)
                 while object_name in object_names:
                     object_name = "_" + object_name
                 object_names.add(object_name)
@@ -512,7 +525,7 @@ def internal_arch_lib_path(name, frida_root, host):
 
 def probe_env(rc, command):
     return subprocess.check_output([
-        "(. \"{rc}\" && PACKAGE_TARNAME=frida-devkit . $CONFIG_SITE && {command})".format(rc=rc, command=command)
+        "(. \"{rc}\" && {command})".format(rc=rc, command=command)
     ], shell=True).decode('utf-8').strip()
 
 def tweak_flags(cflags, ldflags):

@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import json
 import os
 from pathlib import Path, PurePath
@@ -73,6 +74,7 @@ NINJA = BOOTSTRAP_TOOLCHAIN_DIR / "bin" / "ninja.exe"
 
 ALL_PACKAGES: List[Package] = [
     ("zlib", PackageRole.LIBRARY, []),
+    ("xz", PackageRole.LIBRARY, []),
     ("brotli", PackageRole.LIBRARY, []),
     ("minizip", PackageRole.LIBRARY, []),
     ("libffi", PackageRole.LIBRARY, []),
@@ -80,8 +82,10 @@ ALL_PACKAGES: List[Package] = [
     ("pkg-config", PackageRole.TOOL, []),
     ("vala", PackageRole.TOOL, []),
     ("sqlite", PackageRole.LIBRARY, []),
-    ("glib-schannel", PackageRole.LIBRARY, []),
+    ("openssl", PackageRole.LIBRARY, []),
+    ("glib-networking", PackageRole.LIBRARY, []),
     ("libnice", PackageRole.LIBRARY, []),
+    ("usrsctp", PackageRole.LIBRARY, []),
     ("libgee", PackageRole.LIBRARY, []),
     ("json-glib", PackageRole.LIBRARY, []),
     ("libpsl", PackageRole.LIBRARY, []),
@@ -103,13 +107,16 @@ ALL_BUNDLES = {
     ],
     Bundle.SDK: [
         "zlib",
+        "xz",
         "brotli",
         "minizip",
         "libffi",
         "glib",
         "sqlite",
-        "glib-schannel",
+        "openssl",
+        "glib-networking",
         "libnice",
+        "usrsctp",
         "libgee",
         "json-glib",
         "libpsl",
@@ -168,6 +175,13 @@ def main():
 
         package(bundle_ids, params)
         packaging_ended_at = time.time()
+    except subprocess.CalledProcessError as e:
+        print(e, file=sys.stderr)
+        if e.stdout is not None:
+            print("\n=== stdout ===\n" + e.stdout, file=sys.stderr)
+        if e.stderr is not None:
+            print("\n=== stderr ===\n" + e.stderr, file=sys.stderr)
+        sys.exit(1)
     finally:
         ended_at = time.time()
 
@@ -208,21 +222,27 @@ def check_environment():
         print("ERROR: {}".format(e), file=sys.stderr)
         sys.exit(1)
 
-    for tool in ["7z", "git", "py"]:
+    for tool in ["7z", "git", "nasm", "patch", "py"]:
         if shutil.which(tool) is None:
-            print("ERROR: {} not found".format(tool), file=sys.stderr)
+            print("ERROR: {} not found on PATH".format(tool), file=sys.stderr)
             sys.exit(1)
 
 def grab_and_prepare(name: str, spec: PackageSpec, params: DependencyParameters) -> SourceState:
-    if spec.recipe != 'custom':
+    if spec.recipe == 'meson':
         return grab_and_prepare_regular_package(name, spec)
 
     assert name == 'v8'
     return grab_and_prepare_v8_package(spec, params.get_package_spec("depot_tools"))
 
 def grab_and_prepare_regular_package(name: str, spec: PackageSpec) -> SourceState:
-    assert spec.hash == ""
-    assert spec.patches == []
+    if spec.hash == "":
+        return grab_and_prepare_regular_git_package(name, spec)
+    else:
+        return grab_and_prepare_regular_tarball_package(name, spec)
+
+def grab_and_prepare_regular_git_package(name: str, spec: PackageSpec) -> SourceState:
+    # XXX: Don't need the patch for depot_tools on Windows, so we'll hold off on implementing this.
+    assert (spec.patches == []) or (name == "depot_tools")
 
     source_dir = DEPS_DIR / name
     if source_dir.exists():
@@ -244,6 +264,88 @@ def grab_and_prepare_regular_package(name: str, spec: PackageSpec) -> SourceStat
 
     return source_state
 
+def grab_and_prepare_regular_tarball_package(name: str, spec: PackageSpec) -> SourceState:
+    version_file = DEPS_DIR / (name + "-version.txt")
+    try:
+        current_version = version_file.read_text(encoding='utf-8').strip()
+        if current_version == spec.version:
+            return SourceState.PRISTINE
+    except:
+        pass
+
+    source_dir = DEPS_DIR / name
+    if source_dir.exists():
+        shutil.rmtree(source_dir)
+        source_state = SourceState.MODIFIED
+    else:
+        source_state = SourceState.PRISTINE
+
+    archive_path = None
+    sha256 = hashlib.sha256()
+    try:
+        print("> Downloading", spec.url)
+
+        with urllib.request.urlopen(spec.url) as response, tempfile.NamedTemporaryFile(delete=False) as archive:
+            archive_path = Path(archive.name)
+            while True:
+                chunk = response.read(65536)
+                if len(chunk) == 0:
+                    break
+                archive.write(chunk)
+                sha256.update(chunk)
+
+        digest = sha256.hexdigest()
+        if digest != spec.hash:
+            raise ValueError("{} tarball is corrupted; its hash is {}".format(name, digest))
+
+        print("> Extracting", spec.url)
+
+        staging_dir = source_dir / "__staging__"
+        staging_dir.mkdir(parents=True)
+
+        uncompress = subprocess.Popen(["7z", "x", "-tgzip", "-so", archive_path],
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+        extract = subprocess.Popen(["7z", "x", "-ttar", "-si"],
+                                   stdin=uncompress.stdout,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT,
+                                   encoding='utf-8',
+                                   cwd=staging_dir)
+        uncompress.stdout.close()
+        output = extract.communicate()[0]
+        if extract.returncode != 0:
+            raise ValueError("{} extraction failed: {}".format(name, output))
+
+        for entry in staging_dir.glob(name + "*/*"):
+            shutil.move(str(entry), source_dir)
+
+        shutil.rmtree(staging_dir)
+    finally:
+        if archive_path is not None:
+            try:
+                archive_path.unlink()
+            except:
+                pass
+
+    for patch_name in spec.patches:
+        print("> Applying", patch_name)
+        patch_path = Path(RELENG_DIR / "patches" / patch_name)
+        patch_data = patch_path.read_text(encoding='utf-8')
+        p = subprocess.Popen(["patch", "-p1"],
+                             stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT,
+                             encoding='utf-8',
+                             cwd=source_dir)
+        output = p.communicate(patch_data)[0]
+        if p.returncode != 0:
+            raise ValueError("unable to apply {}: {}".format(patch_name, output))
+
+    version_file.write_text(spec.version + "\n", encoding='utf-8')
+
+    return source_state
+
 def grab_and_prepare_v8_package(v8_spec: PackageSpec, depot_spec: PackageSpec) -> SourceState:
     assert v8_spec.hash == ""
     assert v8_spec.patches == []
@@ -254,6 +356,7 @@ def grab_and_prepare_v8_package(v8_spec: PackageSpec, depot_spec: PackageSpec) -
     assert depot_spec.deps_for_build == []
     grab_and_prepare_regular_package("depot_tools", depot_spec)
     depot_dir = DEPS_DIR / "depot_tools"
+    perform("git", "checkout", "-q", "main", cwd=depot_dir)
     gclient = depot_dir / "gclient.bat"
     env = make_v8_env(depot_dir)
     metrics_cfg = depot_dir / "metrics.cfg"
@@ -313,6 +416,9 @@ def build_package(name: str, role: PackageRole, spec: PackageSpec, extra_options
                 if manifest_path.exists():
                     continue
 
+                print()
+                print("*** Building {} with arch={} runtime={} config={} spec={}".format(spec.name, arch, config, runtime, spec))
+
                 if spec.recipe == 'meson':
                     build_using_meson(name, arch, config, runtime, spec, extra_options)
                 else:
@@ -323,8 +429,6 @@ def build_package(name: str, role: PackageRole, spec: PackageSpec, extra_options
                 assert manifest_path.exists()
 
 def build_using_meson(name: str, arch: str, config: str, runtime: str, spec: PackageSpec, extra_options: List[str]):
-    print()
-    print("*** Building name={} arch={} runtime={} config={} spec={}".format(name, arch, config, runtime, spec))
     env_dir, shell_env = get_meson_params(arch, config, runtime)
 
     source_dir = DEPS_DIR / name
@@ -434,7 +538,7 @@ def generate_meson_env(arch: str, config: str, runtime: str) -> MesonEnv:
     m4_path = BOOTSTRAP_TOOLCHAIN_DIR / "bin" / "m4.exe"
     bison_pkgdatadir = BOOTSTRAP_TOOLCHAIN_DIR / "share" / "bison"
 
-    vala_flags = "--target-glib=" + detect_target_glib()
+    vala_flags = "--target-glib=2.56"
 
     exe_path = ";".join([str(path) for path in [
         prefix / "bin",
@@ -572,18 +676,6 @@ sys.exit(subprocess.call([r"{bison_path}"] + args))
     shell_env["VALAFLAGS"] = vala_flags
 
     return MesonEnv(env_dir, shell_env)
-
-def detect_target_glib() -> str:
-    global cached_target_glib
-    if cached_target_glib is None:
-        major, minor = re.search(r"  version : '(\d+)\.(\d+)\.(\d+)'",
-            (DEPS_DIR / "glib" / "meson.build").read_text(encoding='utf-8')).group(1, 2)
-        major = int(major)
-        minor = int(minor)
-        if minor % 2 != 0:
-            minor += 1
-        cached_target_glib = "{}.{}".format(major, minor)
-    return cached_target_glib
 
 def detect_bootstrap_valac() -> str:
     global cached_bootstrap_valac
@@ -927,7 +1019,7 @@ def vscrt_from_configuration_and_runtime(config: str, runtime: str) -> str:
 
 def perform(*args, **kwargs):
     print(">", " ".join([str(arg) for arg in args]))
-    subprocess.run(args, check=True, **kwargs)
+    return subprocess.run(args, check=True, **kwargs)
 
 def query_git_head(repo_path: str) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path, encoding='utf-8').strip()
