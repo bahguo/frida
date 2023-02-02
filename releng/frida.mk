@@ -2,11 +2,13 @@ FRIDA_VERSION := $(shell git describe --tags --always --long | sed 's,-,.,g' | c
 
 include releng/system.mk
 
-FOR_HOST ?= $(build_os_arch)
+FOR_HOST ?= $(build_machine)
+SHELL := $(shell which bash)
 
 frida_gum_flags := \
 	--default-library static \
 	$(FRIDA_FLAGS_COMMON) \
+	-Djailbreak=$(FRIDA_JAILBREAK) \
 	-Dgumpp=enabled \
 	-Dgumjs=enabled \
 	-Dv8=$(FRIDA_V8) \
@@ -22,23 +24,48 @@ frida_core_flags := \
 	-Dconnectivity=$(FRIDA_CONNECTIVITY) \
 	$(FRIDA_MAPPER)
 
-frida_tools = frida frida-discover frida-kill frida-ls-devices frida-ps frida-trace
-
-v8_api_version = 8.0
+frida_tools = \
+	frida \
+	frida-ls-devices \
+	frida-ps \
+	frida-kill \
+	frida-ls \
+	frida-rm \
+	frida-pull \
+	frida-push \
+	frida-discover \
+	frida-trace \
+	frida-join \
+	frida-create \
+	frida-compile \
+	frida-apk \
+	$(NULL)
 
 build/frida-env-%.rc: releng/setup-env.sh build/frida-version.h
-	@for os_arch in $(build_os_arch) $*; do \
-		if [ ! -f build/frida-env-$$os_arch.rc ]; then \
-			FRIDA_HOST=$$os_arch \
+	@if [ $* != $(build_machine) ]; then \
+		cross=yes; \
+	else \
+		cross=no; \
+	fi; \
+	for machine in $(build_machine) $*; do \
+		if [ ! -f build/frida-env-$$machine.rc ]; then \
+			FRIDA_HOST=$$machine \
+			FRIDA_CROSS=$$cross \
 			FRIDA_ASAN=$(FRIDA_ASAN) \
 			XCODE11="$(XCODE11)" \
 			./releng/setup-env.sh || exit 1; \
 		fi \
 	done
 build/frida_thin-env-%.rc: releng/setup-env.sh build/frida-version.h
-	@for os_arch in $(build_os_arch) $*; do \
-		if [ ! -f build/frida_thin-env-$$os_arch.rc ]; then \
-			FRIDA_HOST=$$os_arch \
+	@if [ $* != $(build_machine) ]; then \
+		cross=yes; \
+	else \
+		cross=no; \
+	fi; \
+	for machine in $(build_machine) $*; do \
+		if [ ! -f build/frida_thin-env-$$machine.rc ]; then \
+			FRIDA_HOST=$$machine \
+			FRIDA_CROSS=$$cross \
 			FRIDA_ASAN=$(FRIDA_ASAN) \
 			FRIDA_ENV_NAME=frida_thin \
 			XCODE11="$(XCODE11)" \
@@ -52,9 +79,15 @@ build/frida_thin-env-%.rc: releng/setup-env.sh build/frida-version.h
 	[ ! -d toolchain-$* ] && ln -s frida_thin-toolchain-$* toolchain-$*; \
 	true
 build/frida_gir-env-%.rc: releng/setup-env.sh build/frida-version.h
-	@for os_arch in $(build_os_arch) $*; do \
-		if [ ! -f build/frida_gir-env-$$os_arch.rc ]; then \
-			FRIDA_HOST=$$os_arch \
+	@if [ $* != $(build_machine) ]; then \
+		cross=yes; \
+	else \
+		cross=no; \
+	fi; \
+	for machine in $(build_machine) $*; do \
+		if [ ! -f build/frida_gir-env-$$machine.rc ]; then \
+			FRIDA_HOST=$$machine \
+			FRIDA_CROSS=$$cross \
 			FRIDA_ASAN=$(FRIDA_ASAN) \
 			FRIDA_ENV_NAME=frida_gir \
 			XCODE11="$(XCODE11)" \
@@ -68,7 +101,7 @@ build/frida_gir-env-%.rc: releng/setup-env.sh build/frida-version.h
 	[ ! -d toolchain-$* ] && ln -s frida_gir-toolchain-$* toolchain-$*; \
 	true
 
-build/frida-version.h: releng/generate-version-header.py .git/refs/heads/main
+build/frida-version.h: releng/generate-version-header.py .git/HEAD
 	@$(PYTHON3) releng/generate-version-header.py > $@.tmp
 	@mv $@.tmp $@
 
@@ -81,8 +114,8 @@ define meson-setup-thin
 endef
 
 define meson-setup-for-env
-	meson_args="--native-file build/$1-$(build_os_arch).txt"; \
-	if [ $2 != $(build_os_arch) ]; then \
+	meson_args="--native-file build/$1-$(build_machine).txt"; \
+	if [ $2 != $(build_machine) ]; then \
 		meson_args="$$meson_args --cross-file build/$1-$2.txt"; \
 	fi; \
 	$(MESON) setup $$meson_args
