@@ -70,4 +70,4 @@ Have a look at our [documentation](https://frida.re/docs/home/).
 
 By [apkunpacker](https://github.com/apkunpacker/FridaScripts), 
 [enovella](https://github.com/enovella/fridroid-unpacker), 
-[KingMahmud](https://github.com/KingMahmud/Frida-examples)
+[KingMahmud](https://github.com/KingMahmud/frida-scripts)
