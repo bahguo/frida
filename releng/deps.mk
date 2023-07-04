@@ -1,5 +1,5 @@
-frida_deps_version = 20221210
-frida_bootstrap_version = 20220130
+frida_deps_version = 20230622
+frida_bootstrap_version = 20221210
 
 
 frida_base_url = https://github.com/frida
@@ -79,7 +79,7 @@ zlib_deps_for_build = \
 	$(NULL)
 
 libffi_name = libffi
-libffi_version = 763cf41612c4a9ed98d764a5237acdb9f5337f2d
+libffi_version = 938b07aa8280bcc4f92f08a0fdbb4ad81024bde0
 libffi_url = $(frida_base_url)/libffi.git
 libffi_recipe = meson
 libffi_patches = \
@@ -109,7 +109,7 @@ pcre2_deps_for_build = \
 	$(NULL)
 
 selinux_name = SELinux Userspace
-selinux_version = 9c7ba053bb075cace088d268fda400f6bc4ab14c
+selinux_version = 7d03ec4cd2e08e3bb0c2390a6e68beb3978e2816
 selinux_url = $(frida_base_url)/selinux.git
 selinux_recipe = meson
 selinux_patches = \
@@ -123,7 +123,7 @@ selinux_deps_for_build = \
 	$(NULL)
 
 glib_name = GLib
-glib_version = 805e42d63aa17f58b90a57c71f4b1896f154a535
+glib_version = f3af6c29d39eb7590425d1b22bae29ff6a0ebb6f
 glib_url = $(frida_base_url)/glib.git
 glib_recipe = meson
 glib_patches = \
@@ -155,7 +155,7 @@ ifeq ($(host_os), $(filter $(host_os),android qnx))
 glib_options += -Diconv=external
 glib_deps += libiconv
 endif
-ifeq ($(FRIDA_LIBC), uclibc)
+ifeq ($(host_variant), uclibc)
 glib_options += -Diconv=external
 glib_deps += libiconv
 endif
@@ -263,7 +263,7 @@ minizip_deps_for_build = \
 ifeq ($(host_os), $(filter $(host_os),macos ios watchos tvos android qnx))
 minizip_deps += libiconv
 endif
-ifeq ($(FRIDA_LIBC), uclibc)
+ifeq ($(host_variant), uclibc)
 minizip_deps += libiconv
 endif
 
@@ -426,7 +426,7 @@ libxml2_deps_for_build = \
 	$(NULL)
 
 nghttp2_name = nghttp2
-nghttp2_version = 91a1324cc5bcedbf7cd9a51a61427b362ee08109
+nghttp2_version = ae13d24ea59c30e36ca53d1b22c4e664588d0445
 nghttp2_url = $(frida_base_url)/nghttp2.git
 nghttp2_recipe = meson
 nghttp2_patches = \
@@ -467,13 +467,14 @@ libsoup_deps_for_build = \
 	$(NULL)
 
 capstone_name = Capstone
-capstone_version = 22d317042ee4d251280d2960f5cf294433977db4
+capstone_version = 6ee04f102cbfb6f63c5401a4f346fff87448f97e
 capstone_url = $(frida_base_url)/capstone.git
 capstone_recipe = meson
 capstone_patches = \
 	$(NULL)
 capstone_options = \
-	-Darchs=$(capstone_archs) \
+	-Darchs=all \
+	-Duse_arch_registration=true \
 	-Dx86_att_disable=true \
 	-Dcli=disabled \
 	$(NULL)
@@ -481,17 +482,9 @@ capstone_deps = \
 	$(NULL)
 capstone_deps_for_build = \
 	$(NULL)
-capstone_archs := $(shell echo $(host_arch) | sed $(sed_regex_option) \
-		-e 's,^x86_64$$,x86,' \
-		-e 's,^arm[^0-9].+,arm,' \
-		-e 's,^arm64e$$,arm64,' \
-		-e 's,^arm64eoabi$$,arm64,' \
-		-e 's,^mips.*,mips,' \
-		-e 's,^s390x$$,sysz,' \
-	)
 
 quickjs_name = QuickJS
-quickjs_version = a3303a2bec40fb55df6de5e94e53a7a67e7dbfb0
+quickjs_version = c81f05c9859cea5f83a80057416a0c7affe9b876
 quickjs_url = $(frida_base_url)/quickjs.git
 quickjs_recipe = meson
 quickjs_patches = \
